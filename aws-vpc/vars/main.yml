@@ -1,0 +1,31 @@
+---
+# vars file for aws-vpc
+
+region: "eu-west-2"
+ 
+# VPC
+vpc_cidr: 10.0.0.0/16
+vpc_name: "Ansible VPC"
+ 
+# Subnet
+subnet_public: "Ansible Subnet"
+subnet_cidr_pub: 10.0.1.0/24
+
+subnet_private1: "Ansible pri1 Subnet"
+subnet_cidr_pri1: 10.0.2.0/24
+
+subnet_private2: "Ansible pri2 Subnet"
+subnet_cidr_pri2: 10.0.3.0/24
+
+# Internet Gateway Name
+igw_name: "Traffic IGW"
+route_pub: "vpcpub route" 
+route_pri1: "vpcpri1 route"
+route_pri2: "vpcpri2 route"
+securitygroup_name: "Ansible Security Group"
+ 
+ec2_tag: "WebServer"
+ 
+#The local path to which we would save our EC2 Private Key
+ec2_key_directory: "/home/ansible/roles/aws-vpc/"
+keypair_name: "ec2_key_pair"

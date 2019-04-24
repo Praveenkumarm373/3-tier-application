@@ -1,0 +1,223 @@
+---
+# tasks file for aws-vpc
+
+- name: create VPC
+  ec2_vpc_net:
+    name: "{{ vpc_name }}"
+    cidr_block: "{{ vpc_cidr }}"
+    region: "{{ region }}"
+    state: present
+  register: myvpc
+
+- name: Create variable for VPC ID
+  set_fact:
+    vpc_id: "{{ myvpc.vpc.id }}"
+
+- name: associate pubsubnet to the VPC
+  ec2_vpc_subnet:
+   state: present
+   vpc_id: "{{ vpc_id }}" 
+   region: "{{ region }}"
+   cidr: "{{ subnet_cidr_pub }}"
+   map_public: yes
+   resource_tags:
+     Name: "{{ subnet_public }}"
+  register: pubsubnet
+
+- name: associate prisubnet to the VPC
+  ec2_vpc_subnet:
+   state: present
+   vpc_id: "{{ vpc_id }}"
+   region: "{{ region }}"
+   cidr: "{{ subnet_cidr_pri1 }}"
+   map_public: no
+   resource_tags:
+     Name: "{{ subnet_private1 }}"
+  register: pri1subnet
+
+- name: associate pri2subnet to the VPC
+  ec2_vpc_subnet:
+   state: present
+   vpc_id: "{{ vpc_id }}"
+   region: "{{ region }}"
+   cidr: "{{ subnet_cidr_pri2 }}"
+   map_public: no
+   resource_tags:
+     Name: "{{ subnet_private2 }}"
+  register: pri2subnet
+ 
+- name: create IGW
+  ec2_vpc_igw:
+   vpc_id: "{{ vpc_id }}"
+   region: "{{ region }}"
+   state: "present"
+   tags:
+     Name: "{{ igw_name }}"
+  register: igw
+
+- name: Create new nat gateway and allocate new EIP.
+  ec2_vpc_nat_gateway:
+    state: present
+    subnet_id: "{{ pubsubnet.subnet.id }}"
+#    eip_address: 52.1.1.1
+    wait: yes
+    region: "{{ region }}" 
+  register: new_nat_gateway
+
+- name: Route IGW
+  ec2_vpc_route_table:
+   vpc_id: "{{ vpc_id }}"
+   region: "{{ region }}"
+   subnets:
+     - "{{ pubsubnet.subnet.id }}"
+   routes:
+     - dest: 0.0.0.0/0
+       gateway_id: "{{ igw.gateway_id  }}"
+   tags:
+     Name: "{{ route_pub }}"
+
+- name: Route IGW
+  ec2_vpc_route_table:
+   vpc_id: "{{ vpc_id }}"
+   region: "{{ region }}"
+#   vpc_nat_gateway_id: "{{ new_nat_gateway.nat_gateway_id }}"
+   routes:
+     - dest: 0.0.0.0/0
+       gateway_id: "{{ new_nat_gateway.nat_gateway_id }}"
+ 
+   subnets:
+     - "{{ pri1subnet.subnet.id }}"
+   tags:
+     Name: "{{ route_pri1 }}"
+
+- name: Route IGW
+  ec2_vpc_route_table:
+   vpc_id: "{{ vpc_id }}"
+   region: "{{ region }}"
+   subnets:
+     - "{{ pri2subnet.subnet.id }}"
+   tags:
+     Name: "{{ route_pri2 }}"
+
+# update the CIDR address in the SSH port section.
+ 
+- name: Create Security1 Group
+  ec2_group:
+   name: Web1 DMZ
+   description: DMZ Security1 Group
+   vpc_id: "{{ vpc_id }}"
+   region: "{{ region }}"
+   rules:
+     - proto: tcp
+       from_port: 80
+       to_port: 80 
+       cidr_ip: 0.0.0.0/0
+     - proto: tcp
+       from_port: 443
+       to_port: 443
+       cidr_ip: 0.0.0.0/0
+     - proto: tcp
+       from_port: 22
+       to_port: 22
+       cidr_ip: 0.0.0.0/0
+  register: security1_group
+
+- name: Create Security2 Group
+  ec2_group:
+   name: Web2 DMZ
+   description: DMZ Security2 Group
+   vpc_id: "{{ vpc_id }}"
+   region: "{{ region }}"
+   rules:
+     - proto: tcp
+       from_port: 22
+       to_port: 22
+       group_id: "{{ security1_group.group_id }}"
+     - proto: tcp
+       from_port: 80
+       to_port: 80
+       group_id: "{{ security1_group.group_id }}"
+     - proto: tcp
+       from_port: 443
+       to_port: 443
+       group_id: "{{ security1_group.group_id }}"
+     - proto: icmp
+       from_port: -1
+       to_port: -1
+       group_id: "{{ security1_group.group_id }}"
+  register: security2_group
+
+- name: Create Security3 Group
+  ec2_group:
+   name: Web3 DMZ
+   description: DMZ Security3 Group
+   vpc_id: "{{ vpc_id }}"
+   region: "{{ region }}"
+   rules:
+     - proto: tcp
+       from_port: 3306 
+       to_port: 3306
+       group_id: "{{ security2_group.group_id }}"
+  register: security3_group
+
+- name: create a new ec2 key pair
+  ec2_key:
+   name: ec2_keypair
+   region: "{{ region }}"
+  register: keypair
+ 
+- name: Copy EC2 Private Key locally so it can be later on used to SSH into the instance
+  copy: content= "{{ keypair.key.private_key }}" dest=/home/key.pem
+  when: keypair.changed == true
+ 
+- name: Create EC2 server
+  ec2: 
+   image: ami-0889b8a448de4fc44 
+   wait: yes
+   instance_type: t2.micro
+   region: "{{ region }}"
+   group_id: "{{ security1_group.group_id }}"
+   vpc_subnet_id: "{{ pubsubnet.subnet.id }}"
+   key_name: "{{ keypair.key.name }}"
+   instance_tags:
+     Name: public_instance
+   count_tag:
+     Name: apacheserver
+   user_data: |
+              #!/bin/bash
+              sudo yum update -y
+              sudo yum install httpd -y
+   exact_count: 1
+
+- name: Create EC2 server
+  ec2:
+   image: ami-0889b8a448de4fc44
+   wait: yes
+   instance_type: t2.micro
+   region: "{{ region }}"
+   group_id: "{{ security2_group.group_id }}"
+   vpc_subnet_id: "{{ pri1subnet.subnet.id }}"
+   key_name: "{{ keypair.key.name }}"
+   instance_tags:
+     Name: private1_instance
+   count_tag:
+     Name: apacheserver
+   exact_count: 1
+
+- name: Provisioning RDS Instance 
+  rds:
+   command: create
+   wait: yes 
+   region: "{{ region }}" 
+   subnet: "{{ pri2subnet.subnet.id }}"
+   security_groups: "{{ security3_group.group_id }}"  
+   instance_name: "my-test-rds"
+   db_engine: MySQL 
+   size: 10 
+   db_name: "zippyops-db"
+   instance_type: db.t2.micro 
+   engine_version: "5.6.40"
+   username: "admin" 
+   password: "zippyops" 
+  register: rds 
+
