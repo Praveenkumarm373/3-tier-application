@@ -180,12 +180,7 @@
      - proto: tcp
        from_port: 3306
        to_port: 3306
-       cidr_ip: 0.0.0.0/0
-   rules_egress:
-     - proto: -1
-       from_port: 0
-       to_port: 0
-       cidr_ip: 0.0.0.0/0
+       group_id: "{{ security2_group.group_id }}"
   register: security3_group
 
 - name: create a new ec2 key pair
@@ -268,13 +263,18 @@
               sudo yum install -y java-1.8.0-openjdk-devel
               cd /home/ 
               sudo yum install mysql -y
+              sudo yum install maven -y
               sudo git clone https://github.com/Praveenkumarm373/tomcat.git
+              sudo git clone https://github.com/Praveenkumarm373/myjdbc.git
               sudo yum install tomcat tomcat-webapps tomcat-admin-webapps -y
+              cd /home/myjdbc
+              sudo mvn clean install
               sudo rm -rf /usr/share/tomcat/conf/tomcat-users.xml
               sudo mv /home/tomcat/tomcat-users.xml /usr/share/tomcat/conf/tomcat-users.xml
-              sudo mv /home/tomcat/myjdbc.war /var/lib/tomcat/webapps/myjdbc.war
+              sudo mv /home/myjdbc/target/*.war /var/lib/tomcat/webapps/myjdbc.war
               sudo rm -rf /home/tomcat
-              mysql -h myrds.c6voqflbohj1.eu-west-2.rds.amazonaws.com -u admin -pzippyops -D zippyopsdb -e "create table registration (name varchar(30),email varchar(30) primary key,gender varchar(7),password varchar(30))"
+              sudo rm -rf /home/myjdbc
+              mysql -h myrds.cpyopolnxj5t.eu-west-2.rds.amazonaws.com -u admin -pzippyops -D zippyopsdb -e "create table registration (name varchar(30),email varchar(30) primary key,gender varchar(7),password varchar(30))"
               sudo service tomcat start
    exact_count: 1
 
