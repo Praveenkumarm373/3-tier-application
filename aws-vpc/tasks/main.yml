@@ -53,6 +53,7 @@
     state: absent
     region: "{{ region }}"
     name: dbsg2
+
 - name: create Multi-AZ DB subnet group
   rds_subnet_group:
    name: dbsg2
@@ -81,7 +82,7 @@
     region: "{{ region }}" 
   register: new_nat_gateway
 
-- name: Route IGW
+- name: public Route IGW
   ec2_vpc_route_table:
    vpc_id: "{{ vpc_id }}"
    region: "{{ region }}"
@@ -93,11 +94,10 @@
    tags:
      Name: "{{ route_pub }}"
 
-- name: Route IGW
+- name: private Route IGW
   ec2_vpc_route_table:
    vpc_id: "{{ vpc_id }}"
    region: "{{ region }}"
-#   vpc_nat_gateway_id: "{{ new_nat_gateway.nat_gateway_id }}"
    routes:
      - dest: 0.0.0.0/0
        gateway_id: "{{ new_nat_gateway.nat_gateway_id }}"
@@ -106,7 +106,7 @@
    tags:
      Name: "{{ route_pri1 }}"
 
-- name: Route IGW
+- name: database Route IGW
   ec2_vpc_route_table:
    vpc_id: "{{ vpc_id }}"
    region: "{{ region }}"
@@ -118,11 +118,10 @@
    tags:
      Name: "{{ route_pri2 }}"
 
-# update the CIDR address in the SSH port section.
  
-- name: Create Security1 Group
+- name: Create public Security Group
   ec2_group:
-   name: Web1 DMZ
+   name: public Security Group
    description: DMZ Security1 Group
    vpc_id: "{{ vpc_id }}"
    region: "{{ region }}"
@@ -141,9 +140,9 @@
        cidr_ip: 0.0.0.0/0
   register: security1_group
 
-- name: Create Security2 Group
+- name: Create private Security Group
   ec2_group:
-   name: Web2 DMZ
+   name: private Security Group
    description: DMZ Security2 Group
    vpc_id: "{{ vpc_id }}"
    region: "{{ region }}"
@@ -170,9 +169,9 @@
        group_id: "{{ security1_group.group_id }}"
   register: security2_group
 
-- name: Create Security3 Group
+- name: Create database Security Group
   ec2_group:
-   name: Web3 DMZ
+   name: database Security Group
    description: DMZ Security3 Group
    vpc_id: "{{ vpc_id }}"
    region: "{{ region }}"
@@ -212,40 +211,11 @@
   register: rds
   ignore_errors: yes
 
-- name: Create EC2 server
-  ec2: 
-   image: ami-09ead922c1dad67e4 
-   wait: yes
-   instance_type: t2.micro
-   region: "{{ region }}"
-   group_id: "{{ security1_group.group_id }}"
-   vpc_subnet_id: "{{ pubsubnet.subnet.id }}"
-   key_name: "{{ keypair.key.name }}"
-   instance_tags:
-     Name: public_instance
-   count_tag:
-     Name: apacheserver
-   user_data: |
-              #!/bin/bash
-              sudo yum update -y
-              sudo yum install git -y
-              sudo su
-              cd /home/ 
-              sudo git clone https://github.com/Praveenkumarm373/tomcat.git
-              sudo yum install -y java-1.8.0-openjdk-devel
-              sudo amazon-linux-extras install nginx1.12 -y
-              sudo rm -rf /etc/nginx/nginx.conf
-              sudo mv /home/tomcat/nginx.conf /etc/nginx/nginx.conf
-              sudo rm -rf /home/tomcat
-              sudo service nginx start
-   exact_count: 1
-
-- name: Create EC2 server
+- name: Create private EC2 server
   ec2:
-   image: ami-09ead922c1dad67e4
+   image: ami-0d8e27447ec2c8410
    wait: yes
-   instance_type: t2.micro
-   private_ip: 10.0.2.10
+   instance_type: t2.micro 
    region: "{{ region }}"
    group_id: "{{ security2_group.group_id }}"
    vpc_subnet_id: "{{ pri1subnet.subnet.id }}"
@@ -274,7 +244,41 @@
               sudo mv /home/myjdbc/target/*.war /var/lib/tomcat/webapps/myjdbc.war
               sudo rm -rf /home/tomcat
               sudo rm -rf /home/myjdbc
-              mysql -h myrds.cpyopolnxj5t.eu-west-2.rds.amazonaws.com -u admin -pzippyops -D zippyopsdb -e "create table registration (name varchar(30),email varchar(30) primary key,gender varchar(7),password varchar(30))"
+              mysql -h myrds.ck63qq2etfea.eu-west-2.rds.amazonaws.com -u admin -pzippyops -D zippyopsdb -e "create table registration (name varchar(30),email varchar(30) primary key,gender varchar(7),password varchar(30))"
               sudo service tomcat start
+   exact_count: 1
+
+- name: Initializing Kubernetes cluster
+  shell: aws ec2 describe-instances --filter "Name=tag:Name,Values=private1_instance" "Name=instance-state-name,Values=running" | grep "PrivateIpAddress" | grep "\"," | awk -F"\"" '{print $4}' 
+  register: output
+
+- name: Create public EC2 server
+  ec2:
+   image: ami-0d8e27447ec2c8410
+   wait: yes
+   instance_type: t2.micro
+   region: "{{ region }}"
+   group_id: "{{ security1_group.group_id }}"
+   vpc_subnet_id: "{{ pubsubnet.subnet.id }}"
+   key_name: "{{ keypair.key.name }}"
+   instance_tags:
+     Name: public_instance
+   count_tag:
+     Name: apacheserver
+   user_data: |
+              #!/bin/bash
+              sudo yum update -y
+              sudo yum install git -y
+              sudo su
+              sudo echo "{{ output.stdout }}" > /home/bootstrap.sh
+              cd /home/
+              sudo git clone https://github.com/Praveenkumarm373/tomcat.git
+              sudo yum install -y java-1.8.0-openjdk-devel
+              sudo amazon-linux-extras install nginx1.12 -y
+              sudo rm -rf /etc/nginx/nginx.conf
+              sudo mv /home/tomcat/nginx.conf /etc/nginx/nginx.conf
+              sudo sed -i 's/server 10.0.2.10:8080;/server {{ output.stdout }}:8080;/g' /etc/nginx/nginx.conf
+              sudo rm -rf /home/tomcat
+              sudo service nginx start
    exact_count: 1
 
